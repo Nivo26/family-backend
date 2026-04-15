@@ -1,0 +1,100 @@
+{
+  "members": [
+    {
+      "id": "m1",
+      "name": "Anders"
+    },
+    {
+      "id": "m2",
+      "name": "Familjen"
+    }
+  ],
+  "tabs": [
+    {
+      "id": "biz",
+      "label": "Företaget",
+      "color": "#378ADD",
+      "icon": "briefcase",
+      "locked": false,
+      "ownerId": "m1",
+      "isShared": false,
+      "sharedWith": []
+    },
+    {
+      "id": "pastor",
+      "label": "Pastor",
+      "color": "#7F77DD",
+      "icon": "church",
+      "locked": false,
+      "ownerId": "m1",
+      "isShared": false,
+      "sharedWith": []
+    },
+    {
+      "id": "family",
+      "label": "Familj",
+      "color": "#1D9E75",
+      "icon": "home",
+      "locked": false,
+      "ownerId": "m1",
+      "isShared": true,
+      "sharedWith": [
+        "m2"
+      ]
+    },
+    {
+      "id": "prayer",
+      "label": "Bön",
+      "color": "#7F77DD",
+      "icon": "heart",
+      "locked": true,
+      "ownerId": "m1",
+      "isShared": true,
+      "sharedWith": [
+        "m2"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Skicka faktura",
+      "status": "done",
+      "area": "biz",
+      "due": "2026-04-18",
+      "note": "Följ upp med kvitto."
+    },
+    {
+      "id": "2",
+      "title": "Förbered predikan",
+      "status": "todo",
+      "area": "pastor",
+      "due": "2026-04-20",
+      "note": "Joh 15 och bön i slutet."
+    },
+    {
+      "id": "3",
+      "title": "Handla middag",
+      "status": "todo",
+      "area": "family",
+      "due": "2026-04-16",
+      "note": "Mjölk, pasta och frukt."
+    }
+  ],
+  "prayers": [
+    {
+      "id": "p1",
+      "title": "Be om lugn i familjen",
+      "answered": false
+    },
+    {
+      "id": "p2",
+      "title": "Be för söndagens gudstjänst",
+      "answered": true
+    }
+  ],
+  "currentTab": "biz",
+  "selectedDate": "2026-04-16",
+  "activeMemberId": "m1",
+  "updatedAt": "2026-04-14T15:05:53.014966+00:00"
+}
