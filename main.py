@@ -6,6 +6,10 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+import json
+import requests
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -21,6 +25,30 @@ print("DEBUG MONGO_URL =", MONGO_URL)
 print("DEBUG DB_NAME =", DB_NAME)
 
 app = FastAPI()
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+TOKENS_FILE = Path("google_tokens.json")
+
+
+def load_google_tokens():
+    if not TOKENS_FILE.exists():
+        return {}
+    with open(TOKENS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_google_tokens(data):
+    with open(TOKENS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def save_tokens_for_family(family_id: str, tokens: dict):
+    all_tokens = load_google_tokens()
+    all_tokens[family_id] = tokens
+    save_google_tokens(all_tokens)
 
 app.add_middleware(
     CORSMiddleware,
@@ -198,6 +226,54 @@ def build_ics(planner: Dict[str, Any]) -> str:
 async def root():
     return {"status": "ok", "message": "Familjeplanerare API körs"}
 
+@app.get("/test123")
+def test123():
+    return {"ok": True}
+
+@app.get("/google/start")
+def google_start(family_id: str = "family_anders"):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
+        raise HTTPException(status_code=500, detail="Google OAuth är inte konfigurerat i backend")
+
+    google_auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={GOOGLE_REDIRECT_URI}"
+        f"&response_type=code"
+        f"&scope=https://www.googleapis.com/auth/calendar"
+        f"&access_type=offline"
+        f"&prompt=consent"
+        f"&state={family_id}"
+    )
+
+    return RedirectResponse(url=google_auth_url)
+
+@app.get("/google/callback")
+def google_callback(code: str = None, state: str = "family_anders"):
+    if not code:
+        raise HTTPException(status_code=400, detail="Ingen code från Google")
+
+    token_url = "https://oauth2.googleapis.com/token"
+
+    token_data = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "grant_type": "authorization_code",
+    }
+
+    response = requests.post(token_url, data=token_data)
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"Kunde inte hämta tokens från Google: {response.text}")
+
+    tokens = response.json()
+    family_id = state or "family_anders"
+
+    save_tokens_for_family(family_id, tokens)
+
+    return RedirectResponse(url=f"{FRONTEND_URL}?google=connected&family={family_id}")
 
 @app.get("/api/planner.ics")
 async def planner_ics_feed(family_id: str = Query("family_default")):
@@ -227,6 +303,23 @@ async def get_planner(family_id: str = Query("family_default")):
         print("GET /api/planner ERROR:", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/google/start")
+def google_start(family_id: str = "family_anders"):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
+        raise HTTPException(status_code=500, detail="Google OAuth är inte konfigurerat i backend")
+
+    google_auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={GOOGLE_REDIRECT_URI}"
+        f"&response_type=code"
+        f"&scope=https://www.googleapis.com/auth/calendar"
+        f"&access_type=offline"
+        f"&prompt=consent"
+        f"&state={family_id}"
+    )
+
+    return RedirectResponse(url=google_auth_url)
 
 @app.post("/api/planner")
 async def save_planner(state: Dict[str, Any], family_id: str = Query("family_default")):

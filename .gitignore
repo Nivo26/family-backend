@@ -1,0 +1,11 @@
+# Hemligheter
+.env
+google_tokens.json
+github mm.rtf
+
+# Python
+__pycache__/
+*.pyc
+
+# Övrigt
+.DS_Store
