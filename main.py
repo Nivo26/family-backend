@@ -26,13 +26,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://https://family-frontend-3zbu.onrender.com",
+        "https://family-frontend-3zbu.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 collection = db["planner"]
