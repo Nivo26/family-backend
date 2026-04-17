@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -49,6 +49,90 @@ def save_tokens_for_family(family_id: str, tokens: dict):
     all_tokens = load_google_tokens()
     all_tokens[family_id] = tokens
     save_google_tokens(all_tokens)
+def get_tokens_for_family(family_id: str):
+    all_tokens = load_google_tokens()
+    return all_tokens.get(family_id)
+
+
+def refresh_google_access_token(refresh_token: str):
+    token_url = "https://oauth2.googleapis.com/token"
+
+    token_data = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+
+def create_google_calendar_event(family_id: str, task: dict):
+    saved_tokens = get_tokens_for_family(family_id)
+
+    if not saved_tokens:
+        raise HTTPException(status_code=400, detail="Ingen Google-koppling finns för detta hushåll")
+
+    refresh_token = saved_tokens.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Ingen refresh token sparad för detta hushåll")
+
+    fresh_token_data = refresh_google_access_token(refresh_token)
+    access_token = fresh_token_data.get("access_token")
+
+    if not access_token:
+        raise HTTPException(status_code=500, detail="Google gav ingen access token")
+
+    if not task.get("due") or not task.get("dueTime"):
+        raise HTTPException(status_code=400, detail="Tasken måste ha datum och tid")
+
+    start_datetime = f"{task['due']}T{task['dueTime']}:00"
+    
+    # Första enkla versionen: alla tasks blir 30 minuter långa
+    start_dt = datetime.fromisoformat(start_datetime)
+    end_dt = start_dt.replace(minute=start_dt.minute)  # bara för tydlighet
+    end_dt = start_dt + timedelta(minutes=30)
+
+    reminder_minutes = task.get("reminderMinutes")
+    reminders = {"useDefault": False, "overrides": []}
+
+    if reminder_minutes != "" and reminder_minutes is not None:
+        reminders["overrides"].append({
+            "method": "popup",
+            "minutes": int(reminder_minutes)
+        })
+
+    event_body = {
+        "summary": task.get("title", "Uppgift"),
+        "description": task.get("note", ""),
+        "start": {
+            "dateTime": start_dt.isoformat(),
+            "timeZone": "Europe/Stockholm"
+        },
+        "end": {
+            "dateTime": end_dt.isoformat(),
+            "timeZone": "Europe/Stockholm"
+        },
+        "reminders": reminders,
+    }
+
+    response = requests.post(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json=event_body,
+    )
+
+    if response.status_code not in [200, 201]:
+        raise HTTPException(status_code=500, detail=f"Kunde inte skapa Google-event: {response.text}")
+
+    return response.json()
+
+    response = requests.post(token_url, data=token_data)
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"Kunde inte förnya Google access token: {response.text}")
+
+    return response.json()
 
 app.add_middleware(
     CORSMiddleware,
@@ -252,6 +336,24 @@ def google_start(family_id: str = "family_anders"):
     )
 
     return RedirectResponse(url=google_auth_url)
+
+@app.get("/google/test-create-event")
+def google_test_create_event(family_id: str = "family_anders"):
+    test_task = {
+        "title": "Test från planner",
+        "note": "Detta är ett testevent från appens backend",
+        "due": "2026-04-18",
+        "dueTime": "14:00",
+        "reminderMinutes": 10,
+    }
+
+    event = create_google_calendar_event(family_id, test_task)
+
+    return {
+        "ok": True,
+        "google_event_id": event.get("id"),
+        "google_event_link": event.get("htmlLink"),
+    }
 
 @app.get("/google/callback")
 def google_callback(code: str = None, state: str = "family_anders"):
