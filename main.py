@@ -381,7 +381,6 @@ def google_callback(code: str = None, state: str = "family_anders"):
     save_tokens_for_family(family_id, tokens)
 
     return RedirectResponse(url=f"{FRONTEND_URL}?google=connected&family={family_id}")
-
 @app.get("/api/planner.ics")
 async def planner_ics_feed(family_id: str = Query("family_default")):
     try:
