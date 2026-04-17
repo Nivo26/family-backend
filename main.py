@@ -1,5 +1,4 @@
 from datetime import datetime, timezone, timedelta
-import json
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -31,33 +30,101 @@ print("DEBUG FRONTEND_URL =", FRONTEND_URL)
 
 app = FastAPI()
 
-TOKENS_FILE = Path("google_tokens.json")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://family-frontend-3zbu.onrender.com",
+        "https://family-frontend-3zbu.onrender.com/",
+        "https://mighty-tasks.emergent.host",
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
+collection = db["planner"]
+google_tokens_collection = db["google_tokens"]
+
+DEFAULT_STATE: Dict[str, Any] = {
+    "planner_id": "",
+    "members": [
+        {"id": "m1", "name": "Anders"},
+        {"id": "m2", "name": "Familjen"},
+    ],
+    "currentTab": "biz",
+    "selectedDate": "2026-04-14",
+    "tabs": [
+        {
+            "id": "biz",
+            "label": "Företaget",
+            "color": "#378ADD",
+            "icon": "briefcase",
+            "locked": False,
+            "ownerId": "m1",
+            "isShared": False,
+            "sharedWith": [],
+        },
+        {
+            "id": "pastor",
+            "label": "Pastor",
+            "color": "#7F77DD",
+            "icon": "church",
+            "locked": False,
+            "ownerId": "m1",
+            "isShared": False,
+            "sharedWith": [],
+        },
+        {
+            "id": "family",
+            "label": "Familj",
+            "color": "#1D9E75",
+            "icon": "home",
+            "locked": False,
+            "ownerId": "m1",
+            "isShared": True,
+            "sharedWith": ["m2"],
+        },
+        {
+            "id": "prayer",
+            "label": "Bön",
+            "color": "#7F77DD",
+            "icon": "heart",
+            "locked": True,
+            "ownerId": "m1",
+            "isShared": True,
+            "sharedWith": ["m2"],
+        },
+    ],
+    "tasks": [],
+    "prayers": [],
+}
 
 
-def load_google_tokens():
-    if not TOKENS_FILE.exists():
-        return {}
-    with open(TOKENS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+async def save_tokens_for_family(family_id: str, tokens: dict):
+    await google_tokens_collection.update_one(
+        {"family_id": family_id},
+        {
+            "$set": {
+                "family_id": family_id,
+                "tokens": tokens,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+        upsert=True,
+    )
 
 
-def save_google_tokens(data):
-    with open(TOKENS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+async def get_tokens_for_family(family_id: str):
+    doc = await google_tokens_collection.find_one({"family_id": family_id}, {"_id": 0})
+    if not doc:
+        return None
+    return doc.get("tokens")
 
 
-def save_tokens_for_family(family_id: str, tokens: dict):
-    all_tokens = load_google_tokens()
-    all_tokens[family_id] = tokens
-    save_google_tokens(all_tokens)
-
-
-def get_tokens_for_family(family_id: str):
-    all_tokens = load_google_tokens()
-    return all_tokens.get(family_id)
-
-
-def refresh_google_access_token(refresh_token: str):
+async def refresh_google_access_token(refresh_token: str):
     token_url = "https://oauth2.googleapis.com/token"
     token_data = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -109,8 +176,8 @@ def build_google_event_body(task: dict):
     }
 
 
-def create_google_calendar_event(family_id: str, task: dict):
-    saved_tokens = get_tokens_for_family(family_id)
+async def create_google_calendar_event(family_id: str, task: dict):
+    saved_tokens = await get_tokens_for_family(family_id)
 
     if not saved_tokens:
         raise HTTPException(status_code=400, detail="Ingen Google-koppling finns för detta hushåll")
@@ -119,7 +186,7 @@ def create_google_calendar_event(family_id: str, task: dict):
     if not refresh_token:
         raise HTTPException(status_code=400, detail="Ingen refresh token sparad för detta hushåll")
 
-    fresh_token_data = refresh_google_access_token(refresh_token)
+    fresh_token_data = await refresh_google_access_token(refresh_token)
     access_token = fresh_token_data.get("access_token")
 
     if not access_token:
@@ -145,8 +212,8 @@ def create_google_calendar_event(family_id: str, task: dict):
     return response.json()
 
 
-def update_google_calendar_event(family_id: str, task: dict):
-    saved_tokens = get_tokens_for_family(family_id)
+async def update_google_calendar_event(family_id: str, task: dict):
+    saved_tokens = await get_tokens_for_family(family_id)
 
     if not saved_tokens:
         raise HTTPException(status_code=400, detail="Ingen Google-koppling finns för detta hushåll")
@@ -159,7 +226,7 @@ def update_google_calendar_event(family_id: str, task: dict):
     if not google_event_id:
         raise HTTPException(status_code=400, detail="Tasken saknar googleEventId")
 
-    fresh_token_data = refresh_google_access_token(refresh_token)
+    fresh_token_data = await refresh_google_access_token(refresh_token)
     access_token = fresh_token_data.get("access_token")
 
     if not access_token:
@@ -190,7 +257,7 @@ def update_google_calendar_event(family_id: str, task: dict):
     return response.json()
 
 
-def sync_tasks_to_google(family_id: str, tasks: list):
+async def sync_tasks_to_google(family_id: str, tasks: list):
     synced_tasks = []
 
     for task in tasks:
@@ -207,10 +274,10 @@ def sync_tasks_to_google(family_id: str, tasks: list):
                 print("GOOGLE EVENT ID:", task_copy.get("googleEventId"))
 
                 if already_has_google_event:
-                    event = update_google_calendar_event(family_id, task_copy)
+                    event = await update_google_calendar_event(family_id, task_copy)
                     task_copy["googleEventId"] = event.get("id", task_copy.get("googleEventId", ""))
                 else:
-                    event = create_google_calendar_event(family_id, task_copy)
+                    event = await create_google_calendar_event(family_id, task_copy)
                     task_copy["googleEventId"] = event.get("id", "")
             except Exception as e:
                 print("GOOGLE SYNC TASK ERROR:", task_copy.get("title"), str(e))
@@ -218,42 +285,6 @@ def sync_tasks_to_google(family_id: str, tasks: list):
         synced_tasks.append(task_copy)
 
     return synced_tasks
-
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://family-frontend-3zbu.onrender.com",
-        "https://family-frontend-3zbu.onrender.com/",
-        "https://mighty-tasks.emergent.host",
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
-
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
-collection = db["planner"]
-
-DEFAULT_STATE: Dict[str, Any] = {
-    "planner_id": "",
-    "members": [
-        {"id": "m1", "name": "Anders"},
-        {"id": "m2", "name": "Familjen"},
-    ],
-    "currentTab": "biz",
-    "selectedDate": "2026-04-14",
-    "tabs": [
-        {"id": "biz", "label": "Företaget", "color": "#378ADD", "icon": "briefcase", "locked": False, "ownerId": "m1", "isShared": False, "sharedWith": []},
-        {"id": "pastor", "label": "Pastor", "color": "#7F77DD", "icon": "church", "locked": False, "ownerId": "m1", "isShared": False, "sharedWith": []},
-        {"id": "family", "label": "Familj", "color": "#1D9E75", "icon": "home", "locked": False, "ownerId": "m1", "isShared": True, "sharedWith": ["m2"]},
-        {"id": "prayer", "label": "Bön", "color": "#7F77DD", "icon": "heart", "locked": True, "ownerId": "m1", "isShared": True, "sharedWith": ["m2"]},
-    ],
-    "tasks": [],
-    "prayers": [],
-}
 
 
 async def get_or_create_planner(family_id: str) -> Dict[str, Any]:
@@ -279,11 +310,10 @@ def format_ics_datetime(date_str: str, time_str: str = "09:00") -> str:
 
 def escape_ics_text(value: str) -> str:
     return (
-        value.replace("\", "\\")
+        value.replace("\\", "\\\\")
         .replace(";", r"\;")
         .replace(",", r"\,")
-        .replace("\n", r"
-")
+        .replace("\n", r"\n")
     )
 
 
@@ -383,13 +413,15 @@ def test123():
 
 
 @app.get("/google/test-tokens")
-def google_test_tokens(family_id: str = "family_anders"):
-    all_tokens = load_google_tokens()
+async def google_test_tokens(family_id: str = "family_anders"):
+    tokens = await get_tokens_for_family(family_id)
+    all_docs = await google_tokens_collection.find({}, {"_id": 0, "family_id": 1}).to_list(length=100)
+
     return {
         "family_id": family_id,
-        "all_saved_family_ids": list(all_tokens.keys()),
-        "has_tokens_for_family": bool(all_tokens.get(family_id)),
-        "token_keys": list(all_tokens.get(family_id, {}).keys()),
+        "all_saved_family_ids": [doc.get("family_id") for doc in all_docs],
+        "has_tokens_for_family": bool(tokens),
+        "token_keys": list(tokens.keys()) if tokens else [],
     }
 
 
@@ -413,7 +445,7 @@ def google_start(family_id: str = "family_anders"):
 
 
 @app.get("/google/callback")
-def google_callback(code: str = None, state: str = "family_anders"):
+async def google_callback(code: str = None, state: str = "family_anders"):
     try:
         if not code:
             raise HTTPException(status_code=400, detail="Ingen code från Google")
@@ -438,7 +470,7 @@ def google_callback(code: str = None, state: str = "family_anders"):
         tokens = response.json()
         family_id = state or "family_anders"
 
-        save_tokens_for_family(family_id, tokens)
+        await save_tokens_for_family(family_id, tokens)
 
         return RedirectResponse(url=f"{FRONTEND_URL}?google=connected&family={family_id}")
 
@@ -448,7 +480,7 @@ def google_callback(code: str = None, state: str = "family_anders"):
 
 
 @app.get("/google/test-create-event")
-def google_test_create_event(family_id: str = "family_anders"):
+async def google_test_create_event(family_id: str = "family_anders"):
     test_task = {
         "title": "Test från planner",
         "note": "Detta är ett testevent från appens backend",
@@ -457,7 +489,7 @@ def google_test_create_event(family_id: str = "family_anders"):
         "reminderMinutes": 10,
     }
 
-    event = create_google_calendar_event(family_id, test_task)
+    event = await create_google_calendar_event(family_id, test_task)
 
     return {
         "ok": True,
@@ -501,7 +533,7 @@ async def save_planner(state: Dict[str, Any], family_id: str = Query("family_def
         planner_id = family_id.strip() or "family_default"
 
         incoming_tasks = state.get("tasks", [])
-        synced_tasks = sync_tasks_to_google(planner_id, incoming_tasks)
+        synced_tasks = await sync_tasks_to_google(planner_id, incoming_tasks)
 
         state_to_save = {
             **state,
