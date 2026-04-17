@@ -27,12 +27,10 @@ print("DEBUG ENV_PATH =", ENV_PATH)
 print("DEBUG DB_NAME =", DB_NAME)
 print("DEBUG HAS_GOOGLE_CLIENT_ID =", bool(GOOGLE_CLIENT_ID))
 print("DEBUG HAS_GOOGLE_REDIRECT_URI =", bool(GOOGLE_REDIRECT_URI))
+print("DEBUG FRONTEND_URL =", FRONTEND_URL)
 
 app = FastAPI()
 
-# OBS:
-# Detta fungerar för test, men på Render är lokal fil-lagring inte en bra långsiktig lösning.
-# Senare bör Google-tokens sparas i MongoDB i stället.
 TOKENS_FILE = Path("google_tokens.json")
 
 
@@ -61,7 +59,6 @@ def get_tokens_for_family(family_id: str):
 
 def refresh_google_access_token(refresh_token: str):
     token_url = "https://oauth2.googleapis.com/token"
-
     token_data = {
         "client_id": GOOGLE_CLIENT_ID,
         "client_secret": GOOGLE_CLIENT_SECRET,
@@ -80,22 +77,7 @@ def refresh_google_access_token(refresh_token: str):
     return response.json()
 
 
-def create_google_calendar_event(family_id: str, task: dict):
-    saved_tokens = get_tokens_for_family(family_id)
-
-    if not saved_tokens:
-        raise HTTPException(status_code=400, detail="Ingen Google-koppling finns för detta hushåll")
-
-    refresh_token = saved_tokens.get("refresh_token")
-    if not refresh_token:
-        raise HTTPException(status_code=400, detail="Ingen refresh token sparad för detta hushåll")
-
-    fresh_token_data = refresh_google_access_token(refresh_token)
-    access_token = fresh_token_data.get("access_token")
-
-    if not access_token:
-        raise HTTPException(status_code=500, detail="Google gav ingen access token")
-
+def build_google_event_body(task: dict):
     if not task.get("due") or not task.get("dueTime"):
         raise HTTPException(status_code=400, detail="Tasken måste ha datum och tid")
 
@@ -112,7 +94,7 @@ def create_google_calendar_event(family_id: str, task: dict):
             "minutes": int(reminder_minutes),
         })
 
-    event_body = {
+    return {
         "summary": task.get("title", "Uppgift"),
         "description": task.get("note", ""),
         "start": {
@@ -126,6 +108,25 @@ def create_google_calendar_event(family_id: str, task: dict):
         "reminders": reminders,
     }
 
+
+def create_google_calendar_event(family_id: str, task: dict):
+    saved_tokens = get_tokens_for_family(family_id)
+
+    if not saved_tokens:
+        raise HTTPException(status_code=400, detail="Ingen Google-koppling finns för detta hushåll")
+
+    refresh_token = saved_tokens.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Ingen refresh token sparad för detta hushåll")
+
+    fresh_token_data = refresh_google_access_token(refresh_token)
+    access_token = fresh_token_data.get("access_token")
+
+    if not access_token:
+        raise HTTPException(status_code=500, detail="Google gav ingen access token")
+
+    event_body = build_google_event_body(task)
+
     response = requests.post(
         "https://www.googleapis.com/calendar/v3/calendars/primary/events",
         headers={
@@ -134,6 +135,15 @@ def create_google_calendar_event(family_id: str, task: dict):
         },
         json=event_body,
     )
+
+    print("GOOGLE CREATE STATUS:", response.status_code)
+    print("GOOGLE CREATE RESPONSE:", response.text)
+
+    if response.status_code not in [200, 201]:
+        raise HTTPException(status_code=500, detail=f"Kunde inte skapa Google-event: {response.text}")
+
+    return response.json()
+
 
 def update_google_calendar_event(family_id: str, task: dict):
     saved_tokens = get_tokens_for_family(family_id)
@@ -155,37 +165,14 @@ def update_google_calendar_event(family_id: str, task: dict):
     if not access_token:
         raise HTTPException(status_code=500, detail="Google gav ingen access token")
 
-    if not task.get("due") or not task.get("dueTime"):
-        raise HTTPException(status_code=400, detail="Tasken måste ha datum och tid")
+    event_body = build_google_event_body(task)
 
-    start_datetime = f"{task['due']}T{task['dueTime']}:00"
-    start_dt = datetime.fromisoformat(start_datetime)
-    end_dt = start_dt + timedelta(minutes=30)
+    print("UPDATING GOOGLE EVENT:", google_event_id)
+    print("NEW TITLE:", task.get("title"))
+    print("NEW DUE:", task.get("due"))
+    print("NEW TIME:", task.get("dueTime"))
 
-    reminder_minutes = task.get("reminderMinutes")
-    reminders = {"useDefault": False, "overrides": []}
-
-    if reminder_minutes != "" and reminder_minutes is not None:
-        reminders["overrides"].append({
-            "method": "popup",
-            "minutes": int(reminder_minutes),
-        })
-
-    event_body = {
-        "summary": task.get("title", "Uppgift"),
-        "description": task.get("note", ""),
-        "start": {
-            "dateTime": start_dt.isoformat(),
-            "timeZone": "Europe/Stockholm",
-        },
-        "end": {
-            "dateTime": end_dt.isoformat(),
-            "timeZone": "Europe/Stockholm",
-        },
-        "reminders": reminders,
-    }
-
-    response = requests.put(
+    response = requests.patch(
         f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}",
         headers={
             "Authorization": f"Bearer {access_token}",
@@ -194,15 +181,14 @@ def update_google_calendar_event(family_id: str, task: dict):
         json=event_body,
     )
 
+    print("GOOGLE UPDATE STATUS:", response.status_code)
+    print("GOOGLE UPDATE RESPONSE:", response.text)
+
     if response.status_code not in [200, 201]:
         raise HTTPException(status_code=500, detail=f"Kunde inte uppdatera Google-event: {response.text}")
 
     return response.json()
-    
-    if response.status_code not in [200, 201]:
-        raise HTTPException(status_code=500, detail=f"Kunde inte skapa Google-event: {response.text}")
 
-    return response.json()
 
 def sync_tasks_to_google(family_id: str, tasks: list):
     synced_tasks = []
@@ -216,6 +202,10 @@ def sync_tasks_to_google(family_id: str, tasks: list):
 
         if sync_enabled and has_datetime:
             try:
+                print("SYNC TASK:", task_copy.get("title"))
+                print("HAS GOOGLE EVENT:", already_has_google_event)
+                print("GOOGLE EVENT ID:", task_copy.get("googleEventId"))
+
                 if already_has_google_event:
                     event = update_google_calendar_event(family_id, task_copy)
                     task_copy["googleEventId"] = event.get("id", task_copy.get("googleEventId", ""))
@@ -256,46 +246,10 @@ DEFAULT_STATE: Dict[str, Any] = {
     "currentTab": "biz",
     "selectedDate": "2026-04-14",
     "tabs": [
-        {
-            "id": "biz",
-            "label": "Företaget",
-            "color": "#378ADD",
-            "icon": "briefcase",
-            "locked": False,
-            "ownerId": "m1",
-            "isShared": False,
-            "sharedWith": [],
-        },
-        {
-            "id": "pastor",
-            "label": "Pastor",
-            "color": "#7F77DD",
-            "icon": "church",
-            "locked": False,
-            "ownerId": "m1",
-            "isShared": False,
-            "sharedWith": [],
-        },
-        {
-            "id": "family",
-            "label": "Familj",
-            "color": "#1D9E75",
-            "icon": "home",
-            "locked": False,
-            "ownerId": "m1",
-            "isShared": True,
-            "sharedWith": ["m2"],
-        },
-        {
-            "id": "prayer",
-            "label": "Bön",
-            "color": "#7F77DD",
-            "icon": "heart",
-            "locked": True,
-            "ownerId": "m1",
-            "isShared": True,
-            "sharedWith": ["m2"],
-        },
+        {"id": "biz", "label": "Företaget", "color": "#378ADD", "icon": "briefcase", "locked": False, "ownerId": "m1", "isShared": False, "sharedWith": []},
+        {"id": "pastor", "label": "Pastor", "color": "#7F77DD", "icon": "church", "locked": False, "ownerId": "m1", "isShared": False, "sharedWith": []},
+        {"id": "family", "label": "Familj", "color": "#1D9E75", "icon": "home", "locked": False, "ownerId": "m1", "isShared": True, "sharedWith": ["m2"]},
+        {"id": "prayer", "label": "Bön", "color": "#7F77DD", "icon": "heart", "locked": True, "ownerId": "m1", "isShared": True, "sharedWith": ["m2"]},
     ],
     "tasks": [],
     "prayers": [],
@@ -325,10 +279,11 @@ def format_ics_datetime(date_str: str, time_str: str = "09:00") -> str:
 
 def escape_ics_text(value: str) -> str:
     return (
-        value.replace("\\", "\\\\")
+        value.replace("\", "\\")
         .replace(";", r"\;")
         .replace(",", r"\,")
-        .replace("\n", r"\n")
+        .replace("\n", r"
+")
     )
 
 
@@ -464,7 +419,6 @@ def google_callback(code: str = None, state: str = "family_anders"):
             raise HTTPException(status_code=400, detail="Ingen code från Google")
 
         token_url = "https://oauth2.googleapis.com/token"
-
         token_data = {
             "code": code,
             "client_id": GOOGLE_CLIENT_ID,
@@ -484,13 +438,7 @@ def google_callback(code: str = None, state: str = "family_anders"):
         tokens = response.json()
         family_id = state or "family_anders"
 
-        print("GOOGLE CALLBACK FAMILY ID:", family_id)
-        print("GOOGLE CALLBACK TOKEN KEYS:", list(tokens.keys()))
-
         save_tokens_for_family(family_id, tokens)
-
-        saved = get_tokens_for_family(family_id)
-        print("GOOGLE CALLBACK SAVED OK:", bool(saved))
 
         return RedirectResponse(url=f"{FRONTEND_URL}?google=connected&family={family_id}")
 
@@ -579,6 +527,7 @@ async def save_planner(state: Dict[str, Any], family_id: str = Query("family_def
     except Exception as e:
         print("POST /api/planner ERROR:", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
