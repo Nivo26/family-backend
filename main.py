@@ -357,30 +357,38 @@ def google_test_create_event(family_id: str = "family_anders"):
 
 @app.get("/google/callback")
 def google_callback(code: str = None, state: str = "family_anders"):
-    if not code:
-        raise HTTPException(status_code=400, detail="Ingen code från Google")
+    try:
+        if not code:
+            raise HTTPException(status_code=400, detail="Ingen code från Google")
 
-    token_url = "https://oauth2.googleapis.com/token"
+        token_url = "https://oauth2.googleapis.com/token"
 
-    token_data = {
-        "code": code,
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
-        "grant_type": "authorization_code",
-    }
+        token_data = {
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        }
 
-    response = requests.post(token_url, data=token_data)
+        response = requests.post(token_url, data=token_data)
 
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Kunde inte hämta tokens från Google: {response.text}")
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Kunde inte hämta tokens från Google: {response.text}"
+            )
 
-    tokens = response.json()
-    family_id = state or "family_anders"
+        tokens = response.json()
+        family_id = state or "family_anders"
 
-    save_tokens_for_family(family_id, tokens)
+        save_tokens_for_family(family_id, tokens)
 
-    return RedirectResponse(url=f"{FRONTEND_URL}?google=connected&family={family_id}")
+        return RedirectResponse(url=f"{FRONTEND_URL}?google=connected&family={family_id}")
+
+    except Exception as e:
+        print("GOOGLE CALLBACK ERROR:", str(e))
+        raise HTTPException(status_code=500, detail=f"Google callback kraschade: {str(e)}")
 @app.get("/api/planner.ics")
 async def planner_ics_feed(family_id: str = Query("family_default")):
     try:
