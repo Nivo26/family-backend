@@ -135,6 +135,70 @@ def create_google_calendar_event(family_id: str, task: dict):
         json=event_body,
     )
 
+def update_google_calendar_event(family_id: str, task: dict):
+    saved_tokens = get_tokens_for_family(family_id)
+
+    if not saved_tokens:
+        raise HTTPException(status_code=400, detail="Ingen Google-koppling finns för detta hushåll")
+
+    refresh_token = saved_tokens.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Ingen refresh token sparad för detta hushåll")
+
+    google_event_id = task.get("googleEventId")
+    if not google_event_id:
+        raise HTTPException(status_code=400, detail="Tasken saknar googleEventId")
+
+    fresh_token_data = refresh_google_access_token(refresh_token)
+    access_token = fresh_token_data.get("access_token")
+
+    if not access_token:
+        raise HTTPException(status_code=500, detail="Google gav ingen access token")
+
+    if not task.get("due") or not task.get("dueTime"):
+        raise HTTPException(status_code=400, detail="Tasken måste ha datum och tid")
+
+    start_datetime = f"{task['due']}T{task['dueTime']}:00"
+    start_dt = datetime.fromisoformat(start_datetime)
+    end_dt = start_dt + timedelta(minutes=30)
+
+    reminder_minutes = task.get("reminderMinutes")
+    reminders = {"useDefault": False, "overrides": []}
+
+    if reminder_minutes != "" and reminder_minutes is not None:
+        reminders["overrides"].append({
+            "method": "popup",
+            "minutes": int(reminder_minutes),
+        })
+
+    event_body = {
+        "summary": task.get("title", "Uppgift"),
+        "description": task.get("note", ""),
+        "start": {
+            "dateTime": start_dt.isoformat(),
+            "timeZone": "Europe/Stockholm",
+        },
+        "end": {
+            "dateTime": end_dt.isoformat(),
+            "timeZone": "Europe/Stockholm",
+        },
+        "reminders": reminders,
+    }
+
+    response = requests.put(
+        f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json=event_body,
+    )
+
+    if response.status_code not in [200, 201]:
+        raise HTTPException(status_code=500, detail=f"Kunde inte uppdatera Google-event: {response.text}")
+
+    return response.json()
+    
     if response.status_code not in [200, 201]:
         raise HTTPException(status_code=500, detail=f"Kunde inte skapa Google-event: {response.text}")
 
@@ -150,10 +214,14 @@ def sync_tasks_to_google(family_id: str, tasks: list):
         has_datetime = bool(task_copy.get("due")) and bool(task_copy.get("dueTime"))
         already_has_google_event = bool(task_copy.get("googleEventId"))
 
-        if sync_enabled and has_datetime and not already_has_google_event:
+        if sync_enabled and has_datetime:
             try:
-                event = create_google_calendar_event(family_id, task_copy)
-                task_copy["googleEventId"] = event.get("id", "")
+                if already_has_google_event:
+                    event = update_google_calendar_event(family_id, task_copy)
+                    task_copy["googleEventId"] = event.get("id", task_copy.get("googleEventId", ""))
+                else:
+                    event = create_google_calendar_event(family_id, task_copy)
+                    task_copy["googleEventId"] = event.get("id", "")
             except Exception as e:
                 print("GOOGLE SYNC TASK ERROR:", task_copy.get("title"), str(e))
 
