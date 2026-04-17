@@ -319,6 +319,15 @@ def test123():
         "frontend_url": FRONTEND_URL,
     }
 
+@app.get("/google/test-tokens")
+def google_test_tokens(family_id: str = "family_anders"):
+    tokens = get_tokens_for_family(family_id)
+    return {
+        "has_tokens": bool(tokens),
+        "family_id": family_id,
+        "token_keys": list(tokens.keys()) if tokens else []
+    }
+
 @app.get("/google/start")
 def google_start(family_id: str = "family_anders"):
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
