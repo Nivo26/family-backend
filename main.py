@@ -140,6 +140,27 @@ def create_google_calendar_event(family_id: str, task: dict):
 
     return response.json()
 
+def sync_tasks_to_google(family_id: str, tasks: list):
+    synced_tasks = []
+
+    for task in tasks:
+        task_copy = dict(task)
+
+        sync_enabled = task_copy.get("syncEnabled", True)
+        has_datetime = bool(task_copy.get("due")) and bool(task_copy.get("dueTime"))
+        already_has_google_event = bool(task_copy.get("googleEventId"))
+
+        if sync_enabled and has_datetime and not already_has_google_event:
+            try:
+                event = create_google_calendar_event(family_id, task_copy)
+                task_copy["googleEventId"] = event.get("id", "")
+            except Exception as e:
+                print("GOOGLE SYNC TASK ERROR:", task_copy.get("title"), str(e))
+
+        synced_tasks.append(task_copy)
+
+    return synced_tasks
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -463,8 +484,12 @@ async def save_planner(state: Dict[str, Any], family_id: str = Query("family_def
     try:
         planner_id = family_id.strip() or "family_default"
 
+        incoming_tasks = state.get("tasks", [])
+        synced_tasks = sync_tasks_to_google(planner_id, incoming_tasks)
+
         state_to_save = {
             **state,
+            "tasks": synced_tasks,
             "planner_id": planner_id,
             "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
@@ -478,11 +503,14 @@ async def save_planner(state: Dict[str, Any], family_id: str = Query("family_def
         if not result.acknowledged:
             raise HTTPException(status_code=500, detail="Kunde inte spara till databasen")
 
-        return {"ok": True, "updatedAt": state_to_save["updatedAt"]}
+        return {
+            "ok": True,
+            "updatedAt": state_to_save["updatedAt"],
+            "tasks": synced_tasks,
+        }
     except Exception as e:
         print("POST /api/planner ERROR:", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
