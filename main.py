@@ -228,7 +228,12 @@ async def root():
 
 @app.get("/test123")
 def test123():
-    return {"ok": True}
+    return {
+        "ok": True,
+        "has_google_client_id": bool(GOOGLE_CLIENT_ID),
+        "has_google_redirect_uri": bool(GOOGLE_REDIRECT_URI),
+        "frontend_url": FRONTEND_URL,
+    }
 
 @app.get("/google/start")
 def google_start(family_id: str = "family_anders"):
