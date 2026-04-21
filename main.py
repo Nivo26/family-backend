@@ -256,6 +256,57 @@ async def update_google_calendar_event(family_id: str, task: dict):
 
     return response.json()
 
+async def delete_google_calendar_event(family_id: str, google_event_id: str):
+    saved_tokens = await get_tokens_for_family(family_id)
+
+    if not saved_tokens:
+        raise HTTPException(status_code=400, detail="Ingen Google-koppling finns för detta hushåll")
+
+    refresh_token = saved_tokens.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Ingen refresh token sparad för detta hushåll")
+
+    if not google_event_id:
+        raise HTTPException(status_code=400, detail="Saknar googleEventId")
+
+    fresh_token_data = await refresh_google_access_token(refresh_token)
+    access_token = fresh_token_data.get("access_token")
+
+    if not access_token:
+        raise HTTPException(status_code=500, detail="Google gav ingen access token")
+
+    response = requests.delete(
+        f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+    print("GOOGLE DELETE STATUS:", response.status_code)
+    print("GOOGLE DELETE RESPONSE:", response.text)
+
+    if response.status_code not in [200, 204]:
+        raise HTTPException(status_code=500, detail=f"Kunde inte ta bort Google-event: {response.text}")
+
+    return {"ok": True}
+
+async def delete_removed_tasks_from_google(family_id: str, old_tasks: list, new_tasks: list):
+    new_task_ids = {task.get("id") for task in new_tasks if task.get("id")}
+
+    for old_task in old_tasks:
+        old_task_id = old_task.get("id")
+        google_event_id = old_task.get("googleEventId")
+
+        was_removed = old_task_id and old_task_id not in new_task_ids
+        should_delete_google_event = was_removed and bool(google_event_id)
+
+        if should_delete_google_event:
+            try:
+                print("DELETING REMOVED TASK FROM GOOGLE:", old_task.get("title"))
+                print("GOOGLE EVENT ID:", google_event_id)
+                await delete_google_calendar_event(family_id, google_event_id)
+            except Exception as e:
+                print("GOOGLE DELETE TASK ERROR:", old_task.get("title"), str(e))
 
 async def sync_tasks_to_google(family_id: str, tasks: list):
     synced_tasks = []
@@ -532,7 +583,12 @@ async def save_planner(state: Dict[str, Any], family_id: str = Query("family_def
     try:
         planner_id = family_id.strip() or "family_default"
 
+        existing_planner = await collection.find_one({"planner_id": planner_id}, {"_id": 0})
+        old_tasks = existing_planner.get("tasks", []) if existing_planner else []
+
         incoming_tasks = state.get("tasks", [])
+
+        await delete_removed_tasks_from_google(planner_id, old_tasks, incoming_tasks)
         synced_tasks = await sync_tasks_to_google(planner_id, incoming_tasks)
 
         state_to_save = {
