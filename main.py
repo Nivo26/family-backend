@@ -288,20 +288,27 @@ async def delete_google_calendar_event(family_id: str, google_event_id: str):
 
 
 async def delete_removed_tasks_from_google(family_id: str, old_tasks: list, new_tasks: list):
-    new_task_ids = {task.get("id") for task in new_tasks if task.get("id")}
+    new_tasks_by_id = {task.get("id"): task for task in new_tasks if task.get("id")}
 
     for old_task in old_tasks:
         old_task_id = old_task.get("id")
         google_event_id = old_task.get("googleEventId")
 
-        was_removed = old_task_id and old_task_id not in new_task_ids
-        should_delete_google_event = was_removed and bool(google_event_id)
+        matching_new_task = new_tasks_by_id.get(old_task_id)
+
+        was_removed = old_task_id and matching_new_task is None
+        was_marked_done = matching_new_task and matching_new_task.get("status") == "done"
+
+        should_delete_google_event = bool(google_event_id) and (was_removed or was_marked_done)
 
         if should_delete_google_event:
             try:
-                print("DELETING REMOVED TASK FROM GOOGLE:", old_task.get("title"))
+                print("DELETING TASK FROM GOOGLE:", old_task.get("title"))
                 print("GOOGLE EVENT ID:", google_event_id)
                 await delete_google_calendar_event(family_id, google_event_id)
+
+                if matching_new_task:
+                    matching_new_task["googleEventId"] = ""
             except Exception as e:
                 print("GOOGLE DELETE TASK ERROR:", old_task.get("title"), str(e))
 
