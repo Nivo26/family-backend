@@ -294,21 +294,27 @@ async def delete_removed_tasks_from_google(family_id: str, old_tasks: list, new_
         old_task_id = old_task.get("id")
         google_event_id = old_task.get("googleEventId")
 
+        if not old_task_id or not google_event_id:
+            continue
+
         matching_new_task = new_tasks_by_id.get(old_task_id)
 
-        was_removed = old_task_id and matching_new_task is None
-        was_marked_done = matching_new_task and matching_new_task.get("status") == "done"
+        was_removed = matching_new_task is None
+        was_marked_done = matching_new_task is not None and matching_new_task.get("status") == "done"
 
-        should_delete_google_event = bool(google_event_id) and (was_removed or was_marked_done)
-
-        if should_delete_google_event:
+        if was_removed or was_marked_done:
             try:
                 print("DELETING TASK FROM GOOGLE:", old_task.get("title"))
                 print("GOOGLE EVENT ID:", google_event_id)
+                print("WAS REMOVED:", was_removed)
+                print("WAS MARKED DONE:", was_marked_done)
+
                 await delete_google_calendar_event(family_id, google_event_id)
 
-                if matching_new_task:
+                if matching_new_task is not None:
                     matching_new_task["googleEventId"] = ""
+                    matching_new_task["syncEnabled"] = False
+
             except Exception as e:
                 print("GOOGLE DELETE TASK ERROR:", old_task.get("title"), str(e))
 
