@@ -234,11 +234,6 @@ async def update_google_calendar_event(family_id: str, task: dict):
 
     event_body = build_google_event_body(task)
 
-    print("UPDATING GOOGLE EVENT:", google_event_id)
-    print("NEW TITLE:", task.get("title"))
-    print("NEW DUE:", task.get("due"))
-    print("NEW TIME:", task.get("dueTime"))
-
     response = requests.patch(
         f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}",
         headers={
@@ -255,6 +250,7 @@ async def update_google_calendar_event(family_id: str, task: dict):
         raise HTTPException(status_code=500, detail=f"Kunde inte uppdatera Google-event: {response.text}")
 
     return response.json()
+
 
 async def delete_google_calendar_event(family_id: str, google_event_id: str):
     saved_tokens = await get_tokens_for_family(family_id)
@@ -290,6 +286,7 @@ async def delete_google_calendar_event(family_id: str, google_event_id: str):
 
     return {"ok": True}
 
+
 async def delete_removed_tasks_from_google(family_id: str, old_tasks: list, new_tasks: list):
     new_task_ids = {task.get("id") for task in new_tasks if task.get("id")}
 
@@ -307,6 +304,7 @@ async def delete_removed_tasks_from_google(family_id: str, old_tasks: list, new_
                 await delete_google_calendar_event(family_id, google_event_id)
             except Exception as e:
                 print("GOOGLE DELETE TASK ERROR:", old_task.get("title"), str(e))
+
 
 async def sync_tasks_to_google(family_id: str, tasks: list):
     synced_tasks = []
