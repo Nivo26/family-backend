@@ -471,6 +471,7 @@ def test123():
         "has_google_client_id": bool(GOOGLE_CLIENT_ID),
         "has_google_redirect_uri": bool(GOOGLE_REDIRECT_URI),
         "frontend_url": FRONTEND_URL,
+        "google_calendar_id": GOOGLE_CALENDAR_ID,
     }
 
 
