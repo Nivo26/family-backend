@@ -21,6 +21,7 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 
 print("DEBUG ENV_PATH =", ENV_PATH)
 print("DEBUG DB_NAME =", DB_NAME)
@@ -195,7 +196,7 @@ async def create_google_calendar_event(family_id: str, task: dict):
     event_body = build_google_event_body(task)
 
     response = requests.post(
-        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        f"https://www.googleapis.com/calendar/v3/calendars/{GOOGLE_CALENDAR_ID}/events",
         headers={
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
@@ -235,7 +236,7 @@ async def update_google_calendar_event(family_id: str, task: dict):
     event_body = build_google_event_body(task)
 
     response = requests.patch(
-        f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}",
+        f"https://www.googleapis.com/calendar/v3/calendars/{GOOGLE_CALENDAR_ID}/events/{google_event_id}",
         headers={
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
@@ -272,8 +273,7 @@ async def delete_google_calendar_event(family_id: str, google_event_id: str):
         raise HTTPException(status_code=500, detail="Google gav ingen access token")
 
     response = requests.delete(
-        f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}",
-        headers={
+        f"https://www.googleapis.com/calendar/v3/calendars/{GOOGLE_CALENDAR_ID}/events/{google_event_id}",
             "Authorization": f"Bearer {access_token}",
         },
     )
