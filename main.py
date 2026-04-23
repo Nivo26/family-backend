@@ -273,11 +273,11 @@ async def delete_google_calendar_event(family_id: str, google_event_id: str):
         raise HTTPException(status_code=500, detail="Google gav ingen access token")
 
     response = requests.delete(
-        f"https://www.googleapis.com/calendar/v3/calendars/{GOOGLE_CALENDAR_ID}/events/{google_event_id}",
-            "Authorization": f"Bearer {access_token}",
-        },
-    )
-
+    f"https://www.googleapis.com/calendar/v3/calendars/{GOOGLE_CALENDAR_ID}/events/{google_event_id}",
+    headers={
+        "Authorization": f"Bearer {access_token}",
+    },
+)
     print("GOOGLE DELETE STATUS:", response.status_code)
     print("GOOGLE DELETE RESPONSE:", response.text)
 
