@@ -177,6 +177,52 @@ def build_google_event_body(task: dict):
     }
 
 
+def add_months_safe(date_obj: datetime, months: int = 1) -> datetime:
+    month_index = date_obj.month - 1 + months
+    year = date_obj.year + month_index // 12
+    month = month_index % 12 + 1
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1)
+    else:
+        next_month = datetime(year, month + 1, 1)
+    last_day = (next_month - timedelta(days=1)).day
+    day = min(date_obj.day, last_day)
+    return date_obj.replace(year=year, month=month, day=day)
+
+
+def advance_recurring_task(task: dict) -> dict:
+    repeat = task.get("repeat", "none")
+    if repeat not in ["weekly", "monthly"]:
+        return task
+
+    if not task.get("due"):
+        return task
+
+    try:
+        due = datetime.fromisoformat(f"{task['due']}T12:00:00")
+        if repeat == "weekly":
+            due = due + timedelta(days=7)
+        elif repeat == "monthly":
+            due = add_months_safe(due, 1)
+
+        history = task.get("completionHistory", []) or []
+        history.append({
+            "date": task.get("due"),
+            "completedAt": datetime.now(timezone.utc).isoformat(),
+        })
+
+        task["due"] = due.strftime("%Y-%m-%d")
+        task["status"] = "todo"
+        task["googleEventId"] = ""
+        task["syncEnabled"] = True
+        task["completionHistory"] = history
+        task["lastCompletedAt"] = datetime.now(timezone.utc).isoformat()
+    except Exception as e:
+        print("RECURRENCE ADVANCE ERROR:", task.get("title"), str(e))
+
+    return task
+
+
 async def create_google_calendar_event(family_id: str, task: dict):
     saved_tokens = await get_tokens_for_family(family_id)
 
@@ -273,11 +319,12 @@ async def delete_google_calendar_event(family_id: str, google_event_id: str):
         raise HTTPException(status_code=500, detail="Google gav ingen access token")
 
     response = requests.delete(
-    f"https://www.googleapis.com/calendar/v3/calendars/{GOOGLE_CALENDAR_ID}/events/{google_event_id}",
-    headers={
-        "Authorization": f"Bearer {access_token}",
-    },
-)
+        f"https://www.googleapis.com/calendar/v3/calendars/{GOOGLE_CALENDAR_ID}/events/{google_event_id}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
     print("GOOGLE DELETE STATUS:", response.status_code)
     print("GOOGLE DELETE RESPONSE:", response.text)
 
@@ -294,36 +341,50 @@ async def delete_removed_tasks_from_google(family_id: str, old_tasks: list, new_
         old_task_id = old_task.get("id")
         google_event_id = old_task.get("googleEventId")
 
-        if not old_task_id or not google_event_id:
+        if not old_task_id:
             continue
 
         matching_new_task = new_tasks_by_id.get(old_task_id)
-
         was_removed = matching_new_task is None
         was_marked_done = matching_new_task is not None and matching_new_task.get("status") == "done"
+        is_recurring = matching_new_task is not None and matching_new_task.get("repeat", "none") != "none"
 
-        if was_removed or was_marked_done:
+        if was_removed and google_event_id:
             try:
-                print("DELETING TASK FROM GOOGLE:", old_task.get("title"))
+                print("DELETING REMOVED TASK FROM GOOGLE:", old_task.get("title"))
                 print("GOOGLE EVENT ID:", google_event_id)
-                print("WAS REMOVED:", was_removed)
-                print("WAS MARKED DONE:", was_marked_done)
-
                 await delete_google_calendar_event(family_id, google_event_id)
-
-                if matching_new_task is not None:
-                    matching_new_task["googleEventId"] = ""
-                    matching_new_task["syncEnabled"] = False
-
             except Exception as e:
                 print("GOOGLE DELETE TASK ERROR:", old_task.get("title"), str(e))
 
+        if was_marked_done and google_event_id:
+            try:
+                print("DELETING DONE TASK FROM GOOGLE:", old_task.get("title"))
+                print("GOOGLE EVENT ID:", google_event_id)
+                await delete_google_calendar_event(family_id, google_event_id)
+            except Exception as e:
+                print("GOOGLE DELETE DONE TASK ERROR:", old_task.get("title"), str(e))
+
+        if was_marked_done and matching_new_task is not None:
+            if is_recurring:
+                advance_recurring_task(matching_new_task)
+            else:
+                matching_new_task["googleEventId"] = ""
+                matching_new_task["syncEnabled"] = False
 
 async def sync_tasks_to_google(family_id: str, tasks: list):
     synced_tasks = []
 
     for task in tasks:
         task_copy = dict(task)
+
+        repeat = task_copy.get("repeat", "none")
+        if task_copy.get("status") == "done" and repeat != "none":
+            task_copy = advance_recurring_task(task_copy)
+
+        if task_copy.get("status") == "done":
+            synced_tasks.append(task_copy)
+            continue
 
         sync_enabled = task_copy.get("syncEnabled", True)
         has_datetime = bool(task_copy.get("due")) and bool(task_copy.get("dueTime"))
@@ -347,7 +408,6 @@ async def sync_tasks_to_google(family_id: str, tasks: list):
         synced_tasks.append(task_copy)
 
     return synced_tasks
-
 
 async def get_or_create_planner(family_id: str) -> Dict[str, Any]:
     planner_id = family_id.strip() or "family_default"
